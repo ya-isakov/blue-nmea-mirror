@@ -19,7 +19,6 @@
 package name.kellermann.max.bluenmea;
 
 import java.util.ArrayList;
-import java.util.List;
 import java.io.IOException;
 
 import android.app.Activity;
@@ -30,7 +29,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.widget.TextView;
-import android.widget.Button;
 import android.widget.RadioGroup;
 import android.widget.ListView;
 import android.widget.ArrayAdapter;
@@ -40,62 +38,21 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MenuInflater;
 import android.content.Context;
-import android.content.Intent;
 import android.content.DialogInterface;
-import android.location.GpsStatus;
-import android.location.Location;
+/*import android.location.GpsStatus;
+import android.location.Location;*/
 import android.location.LocationManager;
-import android.location.LocationProvider;
-import android.util.Log;
-
-class ScanThread extends Thread {
-    public static final int SUCCESS = 1;
-    public static final int ERROR = 2;
-    public static final int EXCEPTION = 3;
-
-    Bridge bridge;
-    Handler handler;
-
-    public ScanThread(Bridge _bridge, Handler _handler) {
-        bridge = _bridge;
-        handler = _handler;
-    }
-
-    @Override public void run() {
-        Message msg;
-
-        try {
-            String[] devices;
-            devices = bridge.scan();
-
-            if (devices.length > 0)
-                msg = handler.obtainMessage(SUCCESS, devices);
-            else
-                msg = handler.obtainMessage(ERROR, R.string.no_devices, 0);
-        } catch (NoBluetoothException e) {
-            msg = handler.obtainMessage(ERROR, R.string.no_bluetooth, 0);
-        } catch (IOException e) {
-            msg = handler.obtainMessage(EXCEPTION, e);
-        }
-
-        handler.sendMessage(msg);
-    }
-}
+/*import android.location.LocationProvider;*/
 
 public class BlueNMEA extends Activity
     implements RadioGroup.OnCheckedChangeListener,
-               Source.StatusListener, Client.Listener,
-               Server.Listener {
+               Source.StatusListener, Server.Listener {
     private static final String TAG = "BlueNMEA";
 
     static final int SCANNING_DIALOG = 0;
 
-    Bridge bridge;
-
-    /** the Bluetooth peer; null if none is connected */
-    Client bluetoothClient;
-
     Server tcp, bluetoothServer;
+    boolean tcp_listen, bt_listen;
 
     /** the name of the currently selected location provider */
     String locationProvider;
@@ -105,16 +62,16 @@ public class BlueNMEA extends Activity
     Source source;
 
     RadioGroup locationProviderGroup;
-    TextView providerStatus, bluetoothClientStatus, bluetoothServerStatus, tcpStatus;
+    TextView providerStatus, bluetoothServerStatus, tcpStatus;
 
     ArrayList<Client> clients = new ArrayList<Client>();
-    ArrayAdapter clientListAdapter;
+    ArrayAdapter<String> clientListAdapter;
 
     private void ExceptionAlert(Throwable exception, String title) {
         AlertDialog dialog = new AlertDialog.Builder(this).create();
         dialog.setTitle(title);
         dialog.setMessage(exception.getMessage());
-        dialog.setButton("OK", new DialogInterface.OnClickListener() {
+        dialog.setButton(DialogInterface.BUTTON_POSITIVE, "OK", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface dialog, int which) {
                     dialog.cancel();
                 }
@@ -142,8 +99,6 @@ public class BlueNMEA extends Activity
 
         providerStatus = (TextView)findViewById(R.id.providerStatus);
         providerStatus.setText(R.string.status_unknown);
-        bluetoothClientStatus = (TextView)findViewById(R.id.bluetoothClientStatus);
-        bluetoothClientStatus.setText("not connected");
         bluetoothServerStatus = (TextView)findViewById(R.id.bluetoothServerStatus);
         bluetoothServerStatus.setText("not initialized");
         tcpStatus = (TextView)findViewById(R.id.tcpStatus);
@@ -151,21 +106,12 @@ public class BlueNMEA extends Activity
         locationProviderGroup = (RadioGroup)findViewById(R.id.provider);
         locationProviderGroup.setOnCheckedChangeListener(this);
 
-        Button button;
-
-        button = (Button) findViewById(R.id.connectButton);
-        button.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    onConnectButtonClicked();
-                }
-            });
-
         locationProvider = LocationManager.GPS_PROVIDER;
         locationManager = (LocationManager)getSystemService(Context.LOCATION_SERVICE);
         source = new Source(locationManager, this);
 
         clientListAdapter =
-            new ArrayAdapter(this, android.R.layout.simple_list_item_1);
+            new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
         ListView clientList = (ListView)findViewById(R.id.clients);
         clientList.setAdapter(clientListAdapter);
 
@@ -196,29 +142,44 @@ public class BlueNMEA extends Activity
                     builder.create().show();
                 }
             });
-
-        bridge = new Bridge();
-        if (!bridge.loaded || !bridge.available()) {
-            bridge = null;
-            bluetoothClientStatus.setText("not available");
-            button.setVisibility(View.GONE);
-        }
-
+        tcp_listen = false;
         try {
             int port = 4352;
             tcp = new TCPServer(this, port);
             tcpStatus.setText("listening on port " + port);
+            tcp_listen = true;
         } catch (IOException e) {
             tcpStatus.setText("failed: " + e.getMessage());
         }
 
+        bt_listen = false;
         try {
             bluetoothServer = new ToothServer(this);
             bluetoothServerStatus.setText("listening");
+            bt_listen = true;
         } catch (Exception e) {
             bluetoothServerStatus.setText("failed: " + e.getMessage());
         } catch (VerifyError e) {
             bluetoothServerStatus.setText("not available");
+        }
+    }
+
+    /** from Activity */
+    @Override protected void onStop() {
+        super.onStop();
+        if (tcp_listen) {
+            try {
+                tcp.close();
+            } catch (IOException e) {
+            } catch (InterruptedException e) {
+            }
+        }
+        if (bt_listen) {
+            try {
+                bluetoothServer.close();
+            } catch (IOException e) {
+            } catch (InterruptedException e) {
+            }
         }
     }
 
@@ -252,83 +213,6 @@ public class BlueNMEA extends Activity
         }
     }
 
-    /** from Activity */
-    @Override protected void onActivityResult(int requestCode, int resultCode,
-                                              Intent intent) {
-        if (resultCode != RESULT_OK)
-            return;
-
-        String address = intent.getStringExtra(SelectDevice.KEY_ADDRESS);
-        if (address == null)
-            return;
-
-        if (bluetoothClient != null) {
-            removeClient(bluetoothClient);
-
-            bluetoothClient.close();
-            bluetoothClient = null;
-        }
-
-        try {
-            bridge.open(address);
-            bluetoothClientStatus.setText("connected with " + address);
-        } catch (IOException e) {
-            bluetoothClientStatus.setText("failed: " + e.getMessage());
-            return;
-        }
-
-        bluetoothClient = new Peer(this, bridge, address);
-        addClient(bluetoothClient);
-    }
-
-    protected void scanFinished(String[] devices) {
-        ArrayList<String> deviceArray =
-            new ArrayList<String>(devices.length);
-        for (String device: devices)
-            deviceArray.add(device);
-
-        Bundle bundle = new Bundle();
-        bundle.putStringArrayList(SelectDevice.KEY_DEVICES,
-                                  deviceArray);
-
-        Intent intent = new Intent(BlueNMEA.this,
-                                   SelectDevice.class);
-        intent.putExtras(bundle);
-        startActivityForResult(intent, 0);
-    }
-
-    class ScanHandler extends Handler {
-        public void handleMessage(Message msg) {
-            try {
-                dismissDialog(SCANNING_DIALOG);
-            } catch (IllegalArgumentException e) {
-                /* this exception was reported on the Android Market,
-                   however I cannot imagine how this could ever
-                   happen */
-            }
-
-            switch (msg.what) {
-            case ScanThread.SUCCESS:
-                scanFinished((String[])msg.obj);
-                break;
-
-            case ScanThread.ERROR:
-                new AlertDialog.Builder(BlueNMEA.this)
-                    .setTitle(R.string.app_name)
-                    .setMessage(msg.arg1)
-                    .setPositiveButton("OK", null)
-                    .show();
-                return;
-
-            case ScanThread.EXCEPTION:
-                ExceptionAlert((Throwable)msg.obj, "Scan failed");
-                break;
-            }
-        }
-    }
-
-    final Handler scanHandler = new ScanHandler();
-
     class ClientHandler extends Handler {
         public static final int REMOVE = 1;
         public static final int ADD = 2;
@@ -346,37 +230,12 @@ public class BlueNMEA extends Activity
                     return;
 
                 removeClient(client);
-
-                if (client == bluetoothClient) {
-                    bluetoothClient = null;
-                    bluetoothClientStatus.setText("disconnected: " +
-                                                  msg.getData().getString("error"));
-                }
-
                 break;
             }
         }
     }
 
     final Handler clientHandler = new ClientHandler();
-
-    /** from Activity */
-    protected Dialog onCreateDialog(int id) {
-        switch (id) {
-        case SCANNING_DIALOG:
-            ProgressDialog progressDialog = new ProgressDialog(this);
-            progressDialog.setMessage(getString(R.string.scanning));
-            return progressDialog;
-
-        default:
-            return null;
-        }
-    }
-
-    private void onConnectButtonClicked() {
-        showDialog(SCANNING_DIALOG);
-        new ScanThread(bridge, scanHandler).start();
-    }
 
     /** from RadioGroup.OnCheckedChangeListener */
     @Override public void onCheckedChanged(RadioGroup group, int checkedId) {

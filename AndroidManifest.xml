@@ -13,13 +13,11 @@
       </intent-filter>
     </activity>
 
-    <activity android:name=".SelectDevice">
-    </activity>
   </application>
 
-  <uses-sdk android:minSdkVersion="3" />
+  <uses-sdk android:minSdkVersion="5" />
   <uses-permission android:name="android.permission.BLUETOOTH"></uses-permission>
-  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"></uses-permission>    
-  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"></uses-permission>    
+  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"></uses-permission>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"></uses-permission>
   <uses-permission android:name="android.permission.INTERNET"></uses-permission>
-</manifest> 
+</manifest>

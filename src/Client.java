@@ -18,8 +18,6 @@
 
 package name.kellermann.max.bluenmea;
 
-import java.io.IOException;
-
 /**
  * A Bluetooth peer device.
  */
